@@ -76,6 +76,7 @@ const int LED_PWM_MAX = 255;
 
 // Misc properties
 const int DMX_TIMEOUT = 5;      // in seconds. Turn off if not received DMX for this amount of time.
+const int DMX_TIMEOUT_REBOOT = 20; // in seconds. Reboot if not received DMX for this amount of time.
 const bool TEST_MODE = false;
 
 
@@ -124,8 +125,15 @@ int deltaMatrix[NUM_COLUMNS][NUM_ROWS] = {
 
 
 // Intensity value received via DMX
-unsigned char dmx_master_intensity;
+unsigned char dmx_master_intensity = 0;
 
+// Following variable set to True, means to avoid rebooting in case of loss of a DMX signal.
+// This is used when wanting to start a firmware upgrade, in order to avoid interrupting the
+// upgrade.
+bool suppress_reboot = false;
+
+// Have we printed a timeout message yet?
+bool timeout_processed = false;
 
 /*
  * Arduino setup and loop routines
@@ -160,11 +168,11 @@ void setup() {
 
 
   /*
-   * One LED up while we wait for WiFi
+   * One LED up very dim (1/255) while we wait for WiFi
    */
   digitalWrite(COLUMN_GPIO[0], HIGH);
-  ledcWrite(0, 50);
-  
+  ledcWrite(0, 1);
+
   /*
    * Network setup
    */
@@ -182,6 +190,8 @@ void setup() {
 
       // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
       Serial.println("Start updating " + type);
+
+      suppress_reboot = true;
     })
     .onEnd([]() {
       Serial.println("\nEnd");
@@ -289,7 +299,7 @@ void testLoop()
        * loop and upgrades will time out.
        */
       ArduinoOTA.handle();
-      
+
       delay(100);
       for (int intensity = LED_PWM_MAX; intensity >= 0 ; intensity--) {
         rowWrite(row, intensity);
@@ -310,7 +320,24 @@ void flameLoop()
    * Check if we have a current DMX signal. If not, turn off.
    */
   if (millis() > WifiDMX::dmxLastReceived + DMX_TIMEOUT*1000) {
-    dmx_master_intensity = 0;
+    if (!timeout_processed) {
+      Serial.printf("No DMX signal for %d seconds. Blacking out.\n", DMX_TIMEOUT);
+      dmx_master_intensity = 0;
+      timeout_processed = true;
+    }
+
+    /*
+     * If we have not received a DMX signal even longer, reboot.
+     * Note that this will also cover a "loss of wifi" condition.
+     * If we have no WLAN, then we are also not receiving DMX.
+     */
+    if  ((millis() > WifiDMX::dmxLastReceived + DMX_TIMEOUT_REBOOT*1000) &&
+              (suppress_reboot == false)) {
+      Serial.printf("No DMX signal for %d seconds. Resetting.\n", DMX_TIMEOUT_REBOOT);
+      ESP.restart();
+    }
+  } else {
+    timeout_processed = false;
   }
 
   /*
