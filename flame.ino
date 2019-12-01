@@ -130,7 +130,7 @@ unsigned char dmx_master_intensity = 0;
 // Following variable set to True, means to avoid rebooting in case of loss of a DMX signal.
 // This is used when wanting to start a firmware upgrade, in order to avoid interrupting the
 // upgrade.
-bool suppress_reboot = false;
+bool update_in_progress = false;
 
 // Have we printed a timeout message yet?
 bool timeout_processed = false;
@@ -191,7 +191,7 @@ void setup() {
       // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
       Serial.println("Start updating " + type);
 
-      suppress_reboot = true;
+      update_in_progress = true;
     })
     .onEnd([]() {
       Serial.println("\nEnd");
@@ -317,6 +317,16 @@ void testLoop()
 void flameLoop()
 {
   /*
+   * If we have an update in progress, just blackout and return
+   */
+  if (update_in_progress) {
+    for (int column = 0; column < NUM_COLUMNS; column++) {
+      digitalWrite(COLUMN_GPIO[column], LOW);
+    }
+    return;
+  }
+
+  /*
    * Check if we have a current DMX signal. If not, turn off.
    */
   if (millis() > WifiDMX::dmxLastReceived + DMX_TIMEOUT*1000) {
@@ -331,8 +341,7 @@ void flameLoop()
      * Note that this will also cover a "loss of wifi" condition.
      * If we have no WLAN, then we are also not receiving DMX.
      */
-    if  ((millis() > WifiDMX::dmxLastReceived + DMX_TIMEOUT_REBOOT*1000) &&
-              (suppress_reboot == false)) {
+    if  (millis() > WifiDMX::dmxLastReceived + DMX_TIMEOUT_REBOOT*1000) {
       Serial.printf("No DMX signal for %d seconds. Resetting.\n", DMX_TIMEOUT_REBOOT);
       ESP.restart();
     }
